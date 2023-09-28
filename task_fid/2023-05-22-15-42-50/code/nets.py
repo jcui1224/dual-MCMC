@@ -43,28 +43,6 @@ class _Cifar10_netI(nn.Module):
         oI_log_sigma = self.conv52(oI_l4)
         return oI_mu, oI_log_sigma
 
-class _CelebA64_netI(nn.Module):
-    def __init__(self, nz, nif=64):
-        super().__init__()
-        self.main = nn.Sequential(
-            nn.Conv2d(3, nif, 4, 2, 1, bias=False),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(nif, nif * 2, 4, 2, 1, bias=False),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(nif * 2, nif * 4, 4, 2, 1, bias=False),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(nif * 4, nif * 8, 4, 2, 1, bias=False),
-            nn.LeakyReLU(0.2, inplace=True),
-        )
-        self.conv51 = nn.Conv2d(nif * 8, nz, 4, 1, 0)  # for mu
-        self.conv52 = nn.Conv2d(nif * 8, nz, 4, 1, 0)  # for log_sigma
-
-    def forward(self, input):
-        oI_l4 = self.main(input)
-        oI_mu = self.conv51(oI_l4)
-        oI_log_sigma = self.conv52(oI_l4)
-        return oI_mu, oI_log_sigma
-
 class _GenBlock(nn.Module):
     def __init__(self, in_channels, out_channels, hidden_channels=None, upsample=False):
         super().__init__()
@@ -116,34 +94,6 @@ class _Cifar10_netG(nn.Module):
         h = self.block4(h) # 32x32
         h = F.relu(self.bn_5(h))
         h = self.conv5(h)
-        h = F.tanh(h)
-
-        return h
-
-class _CelebA64_netG(nn.Module):
-    def __init__(self, nz, ngf=256, bottom_width=4):
-        super().__init__()
-        self.nz = nz
-        self.ngf = ngf
-        self.bottom_width = bottom_width
-
-        self.lin_1 = nn.Linear(nz, (self.bottom_width**2)*self.ngf)
-        self.block2 = _GenBlock(self.ngf, self.ngf >> 1, upsample=True)
-        self.block3 = _GenBlock(self.ngf >> 1, self.ngf >> 2, upsample=True)
-        self.block4 = _GenBlock(self.ngf >> 2, self.ngf >> 3, upsample=True)
-        self.block5 = _GenBlock(self.ngf >> 3, self.ngf >> 4, upsample=True)
-        self.bn_6 = nn.BatchNorm2d(self.ngf >> 4)
-        self.conv6 = nn.Conv2d(self.ngf >> 4, 3, 3, 1, 1)
-
-    def forward(self, z):
-        z = z.view(-1, z.shape[1])
-        h = self.lin_1(z).view(-1, self.ngf, self.bottom_width, self.bottom_width) # 4x4
-        h = self.block2(h) # 8x8
-        h = self.block3(h) # 16x16
-        h = self.block4(h) # 32x32
-        h = self.block5(h) # 64x64
-        h = F.relu(self.bn_6(h))
-        h = self.conv6(h)
         h = F.tanh(h)
 
         return h
@@ -220,31 +170,4 @@ class _Cifar10_netE(nn.Module):
         x = F.relu(x)
         x = F.avg_pool2d(x, x.shape[2])
         x = self.lin_5(x.view(x.shape[0], -1))
-        return x
-
-
-class _CelebA64_netE(nn.Module):
-    def __init__(self, nc, ndf=1024):
-        super().__init__()
-        self.nef = ndf
-        c = nc
-
-        # Build the layers
-        self.conv_1 = EBMBlockStart(nc, self.nef >> 4, downsample=True)
-        self.block2 = EBMBlock(self.nef >> 4, self.nef >> 3, downsample=True)
-        self.block3 = EBMBlock(self.nef >> 3, self.nef >> 2, downsample=True)
-        self.block4 = EBMBlock(self.nef >> 2, self.nef >> 1, downsample=True)
-        self.block5 = EBMBlock(self.nef >> 1, self.nef, downsample=True)
-
-        self.lin_6 = nn.Linear(self.nef, 1, bias=False)
-
-    def forward(self, x):
-        x = self.conv_1(x)
-        x = self.block2(x)
-        x = self.block3(x)
-        x = self.block4(x)
-        x = self.block5(x)
-        x = F.relu(x)
-        x = F.avg_pool2d(x, x.shape[2])
-        x = self.lin_6(x.view(x.shape[0], -1))
         return x

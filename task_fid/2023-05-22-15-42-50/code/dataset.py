@@ -326,5 +326,65 @@ def get_dataset(args):
         input_shape = [3, img_size, img_size]
         return train_data, valid_data, input_shape
 
+    if args.dataset == 'celeba256':
+        data_dir = args.data_dir
 
+        num_classes = 1
+        train_transform = transforms.Compose([
+            transforms.Resize(img_size),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
+        valid_transform = transforms.Compose([
+            transforms.Resize(img_size),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
+
+        train_data = LMDBDataset(root=data_dir, name='celeba256', train=True, transform=train_transform)
+        valid_data = LMDBDataset(root=data_dir,  name='celeba256', train=False, transform=valid_transform)
+        input_shape = [3, img_size, img_size]
+        return train_data, valid_data, input_shape
+
+    if args.dataset == 'imagenet32':
+        data_dir = args.data_dir
+        num_classes = 1
+        train_transform = transforms.Compose([
+            transforms.Resize(img_size),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
+        valid_transform = transforms.Compose([
+            transforms.Resize(img_size),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
+        train_data = LMDBDataset(root=data_dir, name='imagenet-oord', train=True, transform=train_transform)
+        valid_data = LMDBDataset(root=data_dir,  name='imagenet-oord', train=False, transform=valid_transform)
+        input_shape = [3, img_size, img_size]
+        return train_data, valid_data, input_shape
+
+    if args.dataset == 'lsun_church_64':
+        data_dir = args.data_dir
+        num_classes = 1
+        train_transform = transforms.Compose([
+            transforms.Resize(img_size),
+            transforms.RandomCrop(img_size),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
+
+        valid_transform = transforms.Compose([
+            transforms.Resize(img_size),
+            transforms.CenterCrop(img_size),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
+
+        train_data = LSUN(root=data_dir, classes=['church_outdoor_train'], transform=train_transform)
+        valid_data = LSUN(root=data_dir, classes=['church_outdoor_val'], transform=valid_transform)
+        return train_data, valid_data, [3, img_size, img_size]
 

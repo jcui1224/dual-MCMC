@@ -1,7 +1,7 @@
 import torch as t
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
-# from config import cifar10_config
+from config import cifar10_config
 from utils import *
 from nets import weights_init
 from dataset import get_dataset
@@ -13,7 +13,6 @@ import datetime
 import argparse
 from argparse import Namespace
 # os.environ["CUDA_VISIBLE_DEVICES"] = "3"
-dataset = 'celeba64'
 mse = nn.MSELoss(reduction='sum').cuda()
 
 def langevin_x(x, netE, args, should_print=True):
@@ -74,62 +73,32 @@ def compute_fid(netG, netE, netI, args):
         print(e)
 
 def build_netG(args):
-    if args.dataset == 'cifar10':
-        from nets import _Cifar10_netG as _netG
-        netG = _netG(nz=args.nz, ngf=args.ngf)
-        netG.apply(weights_init)
-        netG.to(args.device)
-        return netG
-
-    if args.dataset == 'celeba64':
-        from nets import _CelebA64_netG as _netG
-        netG = _netG(nz=args.nz, ngf=args.ngf)
-        netG.apply(weights_init)
-        netG.to(args.device)
-        return netG
+    from nets import _Cifar10_netG as _netG
+    netG = _netG(nz=args.nz, ngf=args.ngf)
+    netG.apply(weights_init)
+    netG.to(args.device)
+    return netG
 
 def build_netE(args):
-    if args.dataset == 'cifar10':
-        from nets import _Cifar10_netE as _netE
-        netE = _netE(nc=3, ndf=args.ndf)
-        netE.apply(weights_init)
-        netE.to(args.device)
-        netE = add_sn(netE)
-        return netE
-
-    if args.dataset == 'celeba64':
-        from nets import _CelebA64_netE as _netE
-        netE = _netE(nc=3, ndf=args.ndf)
-        netE.apply(weights_init)
-        netE.to(args.device)
-        netE = add_sn(netE)
-        return netE
+    from nets import _Cifar10_netE as _netE
+    netE = _netE(nc=3, ndf=args.ndf)
+    netE.apply(weights_init)
+    netE.to(args.device)
+    netE = add_sn(netE)
+    return netE
 
 def build_netI(args):
-    if args.dataset == 'cifar10':
-        from nets import _Cifar10_netI as _netI
-        netI = _netI(nz=args.nz, nif=args.nif)
-        netI.apply(weights_init)
-        netI.to(args.device)
-        return netI
-
-    if args.dataset == 'celeba64':
-        from nets import _CelebA64_netI as _netI
-        netI = _netI(nz=args.nz, nif=args.nif)
-        netI.apply(weights_init)
-        netI.to(args.device)
-        return netI
+    from nets import _Cifar10_netI as _netI
+    netI = _netI(nz=args.nz, nif=args.nif)
+    netI.apply(weights_init)
+    netI.to(args.device)
+    return netI
 
 def letgo(args_job, output_dir):
     set_seeds(1234)
     args = parse_args()
     args = overwrite_opt(args, args_job)
-    if dataset == 'cifar10':
-        from config import cifar10_config
-        args = overwrite_opt(args, cifar10_config)
-    if dataset == 'celeba64':
-        from config import celeba64_config
-        args = overwrite_opt(args, celeba64_config)
+    args = overwrite_opt(args, cifar10_config)
 
     # date = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
     # output_dir += f"/{args.exp_path.split('/')[2]}/{args.exp_ckpt}/{date}/"
@@ -167,7 +136,7 @@ def letgo(args_job, output_dir):
     netI = build_netI(loaded_config)
 
     # ckpt = t.load(args.exp_path + 'ckpt/checkpoint.pth', map_location='cpu')
-    ckpt = t.load(args.exp_path + 'ckpt/3.8353_216.pth', map_location='cpu')
+    ckpt = t.load(args.exp_path + 'ckpt/8.9682_280.pth', map_location='cpu')
     netG.load_state_dict(ckpt['netG'], strict=True)
     netE.load_state_dict(ckpt['netE'], strict=True)
     netI.load_state_dict(ckpt['netI'], strict=True)
@@ -178,7 +147,7 @@ def letgo(args_job, output_dir):
 def parse_args():
     parser = argparse.ArgumentParser()
     # General arguments
-    parser.add_argument('--exp_path', type=str, default='/Tian-ds/jcui7/triangle-abp/a100_double_MCMC4_t1_celeba64/2023-05-06-12-11-17/0/')
+    parser.add_argument('--exp_path', type=str, default='/Tian-ds/jcui7/triangle-abp/a100_double_MCMC4_t1/2023-04-20-22-39-01/0/')
     parser.add_argument('--batch_size', type=int, default=100)
 
     parser.add_argument('--default_ebm_ld', type=bool, default=False)

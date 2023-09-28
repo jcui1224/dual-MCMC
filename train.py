@@ -1,7 +1,6 @@
 import torch as t
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
-from config import cifar10_config
 from utils import *
 from nets import weights_init
 from dataset import get_dataset
@@ -11,22 +10,16 @@ import random
 import itertools
 import datetime
 import argparse
-
+dataset = 'celeba64'
 # os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 mse = nn.MSELoss(reduction='sum').cuda()
 
-def reparametrize(mu, log_sigma, is_train=True):
-    if is_train:
-        std = t.exp(log_sigma.mul(0.5))
-        eps = Variable(std.data.new(std.size()).normal_())
-        return eps.mul(std).add_(mu)
-    else:
-        return mu
+def reparametrize(mu, log_sigma):
+    std = t.exp(log_sigma.mul(0.5))
+    eps = Variable(std.data.new(std.size()).normal_())
+    return eps.mul(std).add_(mu)
 
 def diag_normal_NLL(z, z_mu, z_log_sigma):
-    # define the Negative Log Probability of Normal which has diagonal cov
-    # input: [batch nz, 1, 1] squeeze it to batch nz
-    # return: shape is [batch]
     nll = 0.5 * t.sum(z_log_sigma.squeeze(), dim=1) + \
           0.5 * t.sum((t.mul(z - z_mu, z - z_mu) / (1e-6 + t.exp(z_log_sigma))).squeeze(), dim=1)
     return nll.squeeze()
@@ -42,7 +35,6 @@ def langevin_z(z, x, netG, args, should_print=True):
     for istep in range(l_steps):
         inputV_recon = netG(z)
         errRecon = mse(inputV_recon, x)
-        # errRecon = mse(inputV_recon, x) / batch_size
         grad = t.autograd.grad(errRecon, z)[0]
 
         z.data = z.data - 0.5 * l_step_size * l_step_size * (grad / args.sig / args.sig + 1.0 / (
@@ -60,7 +52,6 @@ def langevin_x(x, netE, args, should_print=True):
     x.requires_grad = True
     for istep in range(l_steps):
         energy = netE(x).sum()
-        # errRecon = mse(inputV_recon, x) / batch_size
         grad = t.autograd.grad(energy, x)[0]
         x.data = x.data - 0.5 * l_step_size * l_step_size * grad
         if args.use_noise:
@@ -93,14 +84,10 @@ def fit(netG, netE, netI, dl_train, test_batch, args, logger):
     lrE_schedule = t.optim.lr_scheduler.ExponentialLR(optE, args.e_gamma)
     lrI_schedule = t.optim.lr_scheduler.ExponentialLR(optI, args.i_gamma)
 
-    import math
-    fid_best_syn = math.inf
-    fid_best_ep = 0
-    to_range_0_1 = lambda x: (x + 1.) / 2. if args.normalize_data else x
     log_iter = int(len(dl_train) // 4) if len(dl_train) > 1000 else int(len(dl_train) // 2)
 
     noise = t.randn(args.batch_size, args.nz, 1, 1).to(args.device)
-
+    args.mcmc_temp = (args.e_n_step_size/args.e_l_step_size)**2
     for ep in range(args.epochs):
         lrE_schedule.step(epoch=ep)
         lrG_schedule.step(epoch=ep)
@@ -109,9 +96,9 @@ def fit(netG, netE, netI, dl_train, test_batch, args, logger):
         for i, x in enumerate(dl_train, 0):
             if i % log_iter == 0:
                 logger.info(
-                    "==" * 10 + f"ep: {ep} batch: [{i}/{len(dl_train)}] best_fid_syn: {fid_best_syn:.3f} best_fid_ep: {fid_best_ep}" + "==" * 10)
+                    "==" * 10 + f"ep: {ep} batch: [{i}/{len(dl_train)}]" + "==" * 10)
 
-            training_log = f"[{ep}/{args.epochs}][{i}/{len(dl_train)}] best_fid_syn: {fid_best_syn:.3f} fid best ep: {fid_best_ep} \n"
+            training_log = f"[{ep}/{args.epochs}][{i}/{len(dl_train)}] \n"
 
             x = x[0].to(args.device) if type(x) is list else x.to(args.device)
             batch_size = x.shape[0]
@@ -119,21 +106,20 @@ def fit(netG, netE, netI, dl_train, test_batch, args, logger):
             """
             Train G: use the inferred z
             """
-            optG.zero_grad()
             noise.resize_(batch_size, args.nz, 1, 1).normal_()
             noiseV = Variable(noise)
             samples = netG(noiseV)
+            samples_corr = langevin_x(samples, netE, args, should_print=(i % log_iter == 0))
 
+            optG.zero_grad()
             infer_z_mu_true, infer_z_log_sigma_true = netI(x)
             z_input = reparametrize(infer_z_mu_true, infer_z_log_sigma_true)
             z_input_corr = langevin_z(z_input, x, netG, args, should_print=(i % log_iter == 0))
-
-            samples_corr = langevin_x(samples, netE, args, should_print=(i % log_iter == 0))
             inputV_recon = netG(z_input_corr.detach())
             errRecon = mse(inputV_recon, x) / batch_size
             errSample = mse(samples, samples_corr) / batch_size
 
-            errG = errRecon + args.Sfactor * errSample
+            errG = args.Gfactor * errRecon + args.Sfactor * errSample
             errG.backward()
             optG.step()
             with t.no_grad():
@@ -147,7 +133,7 @@ def fit(netG, netE, netI, dl_train, test_batch, args, logger):
             neg_log_q_z = t.mean(diag_normal_NLL(z_input_corr, infer_z_mu_true, infer_z_log_sigma_true))
             infer_z_mu_gen, infer_z_log_sigma_gen = netI(samples_corr)
             errLatent = t.mean(diag_normal_NLL(noiseV, infer_z_mu_gen, infer_z_log_sigma_gen))
-            errI = neg_log_q_z + args.Ifactor * errLatent
+            errI = args.Gfactor * neg_log_q_z + args.Ifactor * errLatent
             errI.backward()
             optI.step()
             training_log += f"{'errI':<20}: {errI.item():<20.2f} {'neg_log_q_z':<20}: {neg_log_q_z.item():<20.2f} {'errLatent':<20}: {errLatent.item():<20.2f}\n"
@@ -164,7 +150,7 @@ def fit(netG, netE, netI, dl_train, test_batch, args, logger):
             Eng_F = netE(samples.detach()).squeeze()
             E_F = t.mean(Eng_F)
             errE = (E_T - E_F)
-            errE_loss = errE / (args.e_n_step_size/args.e_l_step_size)**2
+            errE_loss = errE / args.mcmc_temp if args.use_temp else errE
             errE_loss.backward()
             optE.step()
             training_log += f"{'errE':<20}: {errE_loss.item():<20.2f} {'E_T':<20}: {E_T.item():<20.2f} {'E_F':<20}: {E_F.item():<20.2f}\n"
@@ -212,33 +198,63 @@ def fit(netG, netE, netI, dl_train, test_batch, args, logger):
     return
 
 def build_netG(args):
-    from nets import _Cifar10_netG as _netG
-    netG = _netG(nz=args.nz, ngf=args.ngf)
-    netG.apply(weights_init)
-    netG.to(args.device)
-    return netG
+    if args.dataset == 'cifar10':
+        from nets import _Cifar10_netG as _netG
+        netG = _netG(nz=args.nz, ngf=args.ngf)
+        netG.apply(weights_init)
+        netG.to(args.device)
+        return netG
+
+    if args.dataset == 'celeba64':
+        from nets import _CelebA64_netG as _netG
+        netG = _netG(nz=args.nz, ngf=args.ngf)
+        netG.apply(weights_init)
+        netG.to(args.device)
+        return netG
 
 def build_netE(args):
-    from nets import _Cifar10_netE as _netE
-    netE = _netE(nc=3, ndf=args.ndf)
-    netE.apply(weights_init)
-    netE.to(args.device)
-    netE = add_sn(netE)
-    return netE
+    if args.dataset == 'cifar10':
+        from nets import _Cifar10_netE as _netE
+        netE = _netE(nc=3, ndf=args.ndf)
+        netE.apply(weights_init)
+        netE.to(args.device)
+        netE = add_sn(netE)
+        return netE
+
+    if args.dataset == 'celeba64':
+        from nets import _CelebA64_netE as _netE
+        netE = _netE(nc=3, ndf=args.ndf)
+        netE.apply(weights_init)
+        netE.to(args.device)
+        netE = add_sn(netE)
+        return netE
 
 def build_netI(args):
-    from nets import _Cifar10_netI as _netI
-    netI = _netI(nz=args.nz, nif=args.nif)
-    netI.apply(weights_init)
-    netI.to(args.device)
-    return netI
+    if args.dataset == 'cifar10':
+        from nets import _Cifar10_netI as _netI
+        netI = _netI(nz=args.nz, nif=args.nif)
+        netI.apply(weights_init)
+        netI.to(args.device)
+        return netI
+
+    if args.dataset == 'celeba64':
+        from nets import _CelebA64_netI as _netI
+        netI = _netI(nz=args.nz, nif=args.nif)
+        netI.apply(weights_init)
+        netI.to(args.device)
+        return netI
 
 def letgo(args_job, output_dir):
 
     set_seeds(1234)
     args = parse_args()
     args = overwrite_opt(args, args_job)
-    args = overwrite_opt(args, cifar10_config)
+    if dataset == 'cifar10':
+        from config import cifar10_config
+        args = overwrite_opt(args, cifar10_config)
+    if dataset == 'celeba64':
+        from config import celeba64_config
+        args = overwrite_opt(args, celeba64_config)
     output_dir += '/'
     args.dir = output_dir
 
@@ -252,7 +268,6 @@ def letgo(args_job, output_dir):
 
     ds_train, ds_val, input_shape = get_dataset(args)
     dl_train = t.utils.data.DataLoader(ds_train, batch_size=args.batch_size, shuffle=True, num_workers=0, drop_last=True)
-    dl_val = t.utils.data.DataLoader(ds_val, batch_size=args.batch_size, shuffle=True, num_workers=0, drop_last=True)
     args.input_shape = input_shape
     logger.info("Training samples %d" % len(ds_train))
 
@@ -275,46 +290,7 @@ def letgo(args_job, output_dir):
 def parse_args():
     parser = argparse.ArgumentParser()
     # General arguments
-    parser.add_argument('--epochs', type=int, default=201)
-    parser.add_argument('--batch_size', type=int, default=100)
-
-    parser.add_argument('--lrE', type=float, default=1e-4, help='learning rate for E, default=0.0002')
-    parser.add_argument('--lrG', type=float, default=3e-4, help='learning rate for GI, default=0.0002')
-    parser.add_argument('--lrI', type=float, default=1e-4, help='learning rate for GI, default=0.0002')
-
-    parser.add_argument('--Sfactor', type=float, default=50.0)
-    parser.add_argument('--Ifactor', type=float, default=0.1)
-
-    parser.add_argument('--e_l_steps', type=int, default=30)
-    parser.add_argument('--e_l_step_size', type=float, default=0.5)
-    parser.add_argument('--e_n_step_size', type=float, default=0.001)
-    parser.add_argument("--use_noise", type=bool, default=True)
-    parser.add_argument("--fine_tune", type=bool, default=False)
-
-    parser.add_argument('--ngf', type=int,  default=512)
-    parser.add_argument('--ndf', type=int,  default=512)
-    parser.add_argument('--nif', type=int,  default=128)
-
-    parser.add_argument('--nz', type=int, default=128, help='size of the latent z vector') # 100
-    parser.add_argument('--sig', type=float, default=0.3, help='size of the latent z vector') # 100
-
-    parser.add_argument('--l_steps', type=int, default=10)
-    parser.add_argument('--l_step_size', type=float, default=0.1)
-    parser.add_argument('--n_step_size', type=float, default=0.1)
-    parser.add_argument('--prior_sig', type=float, default=1.0)
-
-    parser.add_argument('--beta1E',  type=float, default=0., help='beta1 for adam. default=0.5')
-    parser.add_argument('--beta1G',  type=float, default=0., help='beta1 for adam GI. default=0.5')
-    parser.add_argument('--beta1I',  type=float, default=0., help='beta1 for adam GI. default=0.5')
-    parser.add_argument('--e_decay', type=float, default=0.0000, help='weight decay for E')
-    parser.add_argument('--i_decay', type=float, default=0.0005, help='weight decay for I')
-    parser.add_argument('--g_decay', type=float, default=0.0005, help='weight decay for G')
-    parser.add_argument('--e_gamma', type=float, default=0.998, help='lr decay for EBM')
-    parser.add_argument('--i_gamma', type=float, default=0.998, help='lr decay for I')
-    parser.add_argument('--g_gamma', type=float, default=0.998, help='lr decay for G')
-
     parser.add_argument('--vis_iter', type=int, default=1)
-
     parser.add_argument('--job_id', type=int, default=0)
     parser.add_argument('--device', type=int, default=0)
     # Parser
@@ -344,7 +320,7 @@ def main():
     output_dir = './{}/'.format(os.path.splitext(os.path.basename(__file__))[0])
     t = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
 
-    output_dir += t + '/'
+    output_dir += dataset + '/' + t + '/'
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(output_dir + 'code/', exist_ok=True)
 
